@@ -1,0 +1,5 @@
+model:
+  provider: qwen
+  name: qwen-14b
+  temperature: 0.2
+  max_tokens: 2048
