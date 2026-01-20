@@ -63,13 +63,15 @@ class BasicAgent:
             f"{', '.join(sorted(CalculatorTool.allowed_functions.keys()))}."
             " Use the `store` field to name each result; reference previous values via {name}."
             " Do not emit memory.* calls, code, loops, tuples, or assignments—fully unroll the math."
+            " Do NOT use math.pi. Use the literal constant 'pi'."
+            " All constants must be written as pi, e, tau (no module prefixes)."
             " Respond with strict JSON: {\"reasoning\": str, \"steps\": [{\"description\": str, \"expression\": str, \"store\": str}]}."
         )
 
         last_error: str | None = None
         raw: str = ""
 
-        for attempt in range(2):  # one initial try + one repair
+        for attempt in range(3):  # one initial try + one repair
             system = LLMMessage(
                 role="system",
                 content=(
