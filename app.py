@@ -1,50 +1,54 @@
-"""AlphaMind CLI entry point."""
+"""Minimal calculator agent wired to LM Studio."""
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
+import sys
 
-from agents.analyst_agent import AnalystAgent
-from agents.critic_agent import CriticAgent
-from agents.memory_agent import MemoryAgent
-from agents.reader_agent import ReaderAgent
-from rag import chunker, embedder, loader
+from agents.basic_agent import AgentResponse, BasicAgent
+from config.runtime import RuntimeSettings
+from llm_client import LLMClient
 
+RESET = "\033[0m"
+INFO = "\033[35m"
+RESULT = "\033[32m"
 
-class EchoLLM:
-    """Minimal LLM stub so the skeleton can run offline."""
-
-    def generate(self, prompt: str) -> str:
-        return f"[LLM OUTPUT]\n{prompt[:200]}..."
+if not sys.stdout.isatty():
+    RESET = INFO = RESULT = ""
 
 
-def run_pipeline(pdf_path: Path) -> None:
-    llm = EchoLLM()
-    pages = loader.load_pdf(pdf_path)
-    chunks = chunker.chunk_text(pages)
-    embedder_model = embedder.SimpleEmbedder()
-    vectors = embedder_model.encode(chunks)
+def build_llm(use_mock: bool) -> LLMClient:
+    settings = RuntimeSettings.from_env()
+    return LLMClient(settings=settings, use_mock=use_mock)
 
-    reader = ReaderAgent(llm)
-    analyst = AnalystAgent(llm, templates=["{points}"])
-    critic = CriticAgent(llm)
-    memory = MemoryAgent(Path("data/metadata"))
 
-    summary = reader.summarize("\n".join(pages))
-    analysis = analyst.draft_analysis(summary)
-    critique, _ = critic.review(analysis)
-    memory.store("demo", "Q1", [critique])
+def run_task(prompt: str, use_mock: bool = False) -> None:
+    llm = build_llm(use_mock)
+    agent = BasicAgent(llm)
+    solution: AgentResponse = agent.solve(prompt)
 
-    print("Chunks:", len(chunks))
-    print("Vectors:", len(vectors))
-    print("Critique:\n", critique)
+    print(f"{INFO}User task:{RESET} {solution.task}", flush=True)
+    if solution.steps:
+        print(f"{INFO}Plan steps:{RESET}", flush=True)
+        for idx, step in enumerate(solution.steps, start=1):
+            if hasattr(step, "expression"):
+                store = getattr(step, "store", None) or "-"
+                desc = getattr(step, "description", f"Step {idx}")
+                expr = getattr(step, "expression", "")
+                print(f"  {idx}. {desc} -> {expr} [store={store}]", flush=True)
+            else:
+                print(f"  {idx}. {step}", flush=True)
+    print(f"{INFO}Expression:{RESET} {solution.expression}", flush=True)
+    print(f"{RESULT}Result:{RESET} {solution.value}", flush=True)
+    if solution.reasoning:
+        print(f"{INFO}Reasoning:{RESET} {solution.reasoning}", flush=True)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AlphaMind earnings pipeline")
-    parser.add_argument("pdf", type=Path, help="Path to the earnings call PDF")
+    parser = argparse.ArgumentParser(description="Single-agent calculator pipeline")
+    parser.add_argument("prompt", help="User query to solve")
+    parser.add_argument("--mock", action="store_true", help="Use mock LLM responses (offline testing)")
     args = parser.parse_args()
-    run_pipeline(args.pdf)
+    run_task(args.prompt, use_mock=args.mock)
 
 
 if __name__ == "__main__":

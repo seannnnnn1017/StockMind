@@ -52,33 +52,19 @@ class BasicAgent:
         for idx, step in enumerate(steps, start=1):
             print(f"{AGENT_COLOR}[agent] planned step {idx}: {step.description} -> {step.expression}{RESET}", flush=True)
         memory = MemoryTool()
+        self._initialize_memory_from_task(task, memory)
         value, final_expr = self._execute_steps(steps, memory)
         return AgentResponse(task=task, expression=final_expr, value=value, reasoning=reasoning, steps=tuple(steps))
 
     def _plan_steps(self, task: str) -> Tuple[List[PlanStep], str | None]:
         system_base = (
-            '''You are an autonomous reasoning agent that plans and executes steps using tools.
-
-                Available tools:
-                - compute(expr) -> number
-                - normalize(expr) -> expr
-                - substitute(expr, var, value) -> expr
-                - check(condition) -> bool
-                - memory.set(name, value)
-                - memory.get(name)
-
-                Rules:
-                - Every step must be a valid tool invocation.
-                - Every produced value must be stored before being reused.
-                - No hidden reasoning: all intermediate states must be explicit.
-                - No assumptions without tool support.
-                - No implicit loops: iterative reasoning must be unrolled as steps.
-                - Plans must be self-consistent: variables must be defined before use.
-                - If a step is impossible, replan.
-
-                Output format:
-                { reasoning: str, steps: [ {description, tool, input, store} ] }'''
-          )
+            "You orchestrate a calculator tool. Each step must be a single arithmetic expression using numbers,"
+            " + - * / ** %, parentheses, the literal constants pi/tau/e, and the math functions "
+            f"{', '.join(sorted(CalculatorTool.allowed_functions.keys()))}."
+            " Use the `store` field to name each result; reference previous values via {name}."
+            " Do not emit memory.* calls, code, loops, tuples, or assignments—fully unroll the math."
+            " Respond with strict JSON: {\"reasoning\": str, \"steps\": [{\"description\": str, \"expression\": str, \"store\": str}]}."
+        )
 
         last_error: str | None = None
         raw: str = ""
@@ -95,12 +81,22 @@ class BasicAgent:
             )
             user = LLMMessage(role="user", content=f"Task: {task}\nReturn only JSON.")
             raw = self.llm.chat([system, user])
-            print(f"{AGENT_COLOR}[agent] LLM plan response (attempt {attempt+1}): {raw.strip()}{RESET}", flush=True)
+            print(
+                f"{AGENT_COLOR}[agent] LLM plan response (attempt {attempt+1}):\n"
+                f"{self._format_plan_text(raw)}{RESET}",
+                flush=True,
+            )
 
             try:
                 return self._parse_plan(raw, task)
             except PlanParseError as e:
                 last_error = str(e)
+                print(f"\033[31m[agent] plan rejected: {last_error}\033[0m", flush=True)
+                print(f"\033[35m[agent] system prompt was:\n{system.content}\033[0m", flush=True)
+                print(
+                    f"\033[35m[agent] user prompt was:\n{user.content}\033[0m",
+                    flush=True,
+                )
                 continue
 
         # Final fallback if repair also fails
@@ -130,6 +126,22 @@ class BasicAgent:
                         "Multi-line expressions are not supported; each step must be a single arithmetic expression.",
                         raw,
                     )
+                placeholders = re.findall(r"\{([A-Za-z_][A-Za-z0-9_]*)\}", expression)
+                for placeholder in placeholders:
+                    if placeholder in {"pi", "tau", "e"}:
+                        raise PlanParseError(
+                            f"Use literal constants (e.g., pi) rather than {{{placeholder}}}.", raw
+                        )
+                stripped = expression
+                for placeholder in placeholders:
+                    stripped = stripped.replace(f"{{{placeholder}}}", "")
+                allowed_words = {"pi", "tau", "e"} | set(CalculatorTool.allowed_functions.keys())
+                for word in allowed_words:
+                    stripped = re.sub(rf"\b{word}\b", "", stripped)
+                if re.search(r"[A-Za-z_]", stripped):
+                    raise PlanParseError(
+                        "Variables other than placeholders or supported function names are not allowed.", raw
+                    )
                 steps.append(PlanStep(description=description, expression=expression, store=store))
             if not steps:
                 raise PlanParseError("No valid steps were produced.", raw)
@@ -145,7 +157,7 @@ class BasicAgent:
             return str(math.tau)
         if " e" in lower or lower.startswith("e"):
             return str(math.e)
-        digits = [c for c in task if c.isdigit() or c in ".+-*/() "]
+        digits = [c for c in task if c.isdigit() or c in ".+-*/()"]
         expr = "".join(digits).strip()
         return expr or "0"
 
@@ -183,3 +195,36 @@ class BasicAgent:
         replacements = {"pi": str(math.pi), "tau": str(math.tau), "e": str(math.e)}
         pattern = re.compile(r"\b(pi|tau|e)\b")
         return pattern.sub(lambda m: replacements[m.group(0)], expression)
+
+    def _initialize_memory_from_task(self, task: str, memory: MemoryTool) -> None:
+        # Patterns like: x=2, x = 2, or 'x is 2'
+        assignment_pattern = re.compile(r"([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=|is)\s*(-?\d+(?:\.\d+)?)", re.IGNORECASE)
+        for name, value in assignment_pattern.findall(task):
+            try:
+                memory.set(name, float(value))
+            except ValueError:
+                continue
+
+    def _format_plan_text(self, raw: str) -> str:
+        raw = raw.strip()
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            try:
+                data = json.loads(raw[start : end + 1])
+                reasoning = data.get("reasoning", "")
+                steps = data.get("steps", [])
+                lines = []
+                if reasoning:
+                    lines.append(f"Reasoning:\n  {reasoning}")
+                if steps:
+                    lines.append("Steps:")
+                    for idx, step in enumerate(steps, start=1):
+                        desc = step.get("description", "")
+                        expr = step.get("expression", "")
+                        store = step.get("store", "")
+                        lines.append(f"  {idx}. desc={desc} | expr={expr} | store={store}")
+                return "\n".join(lines) or raw
+            except json.JSONDecodeError:
+                return raw
+        return raw

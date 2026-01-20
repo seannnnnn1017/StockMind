@@ -1,5 +1,0 @@
-paths:
-  raw_pdfs: data/raw_pdfs
-  processed_text: data/processed_text
-  embeddings: data/embeddings
-  metadata: data/metadata
