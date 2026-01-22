@@ -1,4 +1,4 @@
-"""Multi-step calculator-only agent."""
+"""Router agent that answers directly or uses a calculator plan."""
 from __future__ import annotations
 
 import json
@@ -26,10 +26,19 @@ class PlanStep:
 @dataclass(slots=True)
 class AgentResponse:
     task: str
-    expression: str
-    value: float
+    answer: str | None = None
+    expression: str | None = None
+    value: float | None = None
+    outputs: Tuple[Tuple[str, float], ...] = ()
     reasoning: str | None = None
     steps: Tuple[PlanStep, ...] = ()
+
+
+@dataclass(slots=True)
+class RouteDecision:
+    mode: str
+    answer: str | None = None
+    reasoning: str | None = None
 
 
 class PlanParseError(Exception):
@@ -39,7 +48,7 @@ class PlanParseError(Exception):
 
 
 class BasicAgent:
-    """Plans step-by-step calculator executions using the LLM."""
+    """Routes between direct LLM answers and calculator plans."""
 
     def __init__(self, llm: LLMClient, calculator: CalculatorTool | None = None) -> None:
         self.llm = llm
@@ -47,14 +56,58 @@ class BasicAgent:
         self.loop = LoopTool()
 
     def solve(self, task: str) -> AgentResponse:
+        decision = self._route_task(task)
+        if decision.mode == "respond":
+            return AgentResponse(task=task, answer=decision.answer, reasoning=decision.reasoning)
         print(f"{AGENT_COLOR}[agent] planning solution for task: {task}{RESET}", flush=True)
         steps, reasoning = self._plan_steps(task)
         for idx, step in enumerate(steps, start=1):
             print(f"{AGENT_COLOR}[agent] planned step {idx}: {step.description} -> {step.expression}{RESET}", flush=True)
         memory = MemoryTool()
         self._initialize_memory_from_task(task, memory)
-        value, final_expr = self._execute_steps(steps, memory)
-        return AgentResponse(task=task, expression=final_expr, value=value, reasoning=reasoning, steps=tuple(steps))
+        value, final_expr, outputs = self._execute_steps(steps, memory)
+        return AgentResponse(
+            task=task,
+            answer=str(value),
+            expression=final_expr,
+            value=value,
+            outputs=outputs,
+            reasoning=reasoning,
+            steps=tuple(steps),
+        )
+
+    def _route_task(self, task: str) -> RouteDecision:
+        system = LLMMessage(
+            role="system",
+            content=(
+                "Decide whether the user needs a calculation or a direct answer. "
+                "If calculation is needed, respond with strict JSON: "
+                "{\"mode\": \"calculate\", \"reasoning\": str}. "
+                "If a direct response is needed, respond with strict JSON: "
+                "{\"mode\": \"respond\", \"answer\": str, \"reasoning\": str}. "
+                "Only return JSON."
+            ),
+        )
+        user = LLMMessage(role="user", content=f"Task: {task}")
+        raw = self.llm.chat([system, user], temperature=0)
+        print(
+            f"{AGENT_COLOR}[agent] routing response:\n{self._format_plan_text(raw)}{RESET}",
+            flush=True,
+        )
+        try:
+            payload = raw[raw.find("{") : raw.rfind("}") + 1]
+            data = json.loads(payload)
+            mode = str(data.get("mode", "")).strip().lower()
+            reasoning = data.get("reasoning")
+            if mode == "respond":
+                answer = str(data.get("answer", "")).strip()
+                if answer:
+                    return RouteDecision(mode="respond", answer=answer, reasoning=reasoning)
+            if mode == "calculate":
+                return RouteDecision(mode="calculate", reasoning=reasoning)
+        except json.JSONDecodeError:
+            pass
+        return RouteDecision(mode="calculate")
 
     def _plan_steps(self, task: str) -> Tuple[List[PlanStep], str | None]:
         system_base = (
@@ -163,9 +216,10 @@ class BasicAgent:
         expr = "".join(digits).strip()
         return expr or "0"
 
-    def _execute_steps(self, steps: List[PlanStep], memory: MemoryTool) -> Tuple[float, str]:
+    def _execute_steps(self, steps: List[PlanStep], memory: MemoryTool) -> Tuple[float, str, Tuple[Tuple[str, float], ...]]:
         last_value = 0.0
         last_expr = "0"
+        stored: List[Tuple[str, float]] = []
         for idx, step in enumerate(steps, start=1):
             substituted = self._substitute(step.expression, memory)
             normalized = self._normalize(substituted)
@@ -177,9 +231,11 @@ class BasicAgent:
                 raise ValueError(f"Failed on step {idx} ({step.description}): {exc}") from exc
             target = step.store or f"step{idx}"
             memory.set(target, value)
+            if step.store:
+                stored.append((step.store, value))
             last_value = value
             last_expr = normalized
-        return last_value, last_expr
+        return last_value, last_expr, tuple(stored)
 
     def _substitute(self, expression: str, memory: MemoryTool) -> str:
         pattern = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")

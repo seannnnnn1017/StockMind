@@ -37,8 +37,16 @@ def run_task(prompt: str, use_mock: bool = False) -> None:
                 print(f"  {idx}. {desc} -> {expr} [store={store}]", flush=True)
             else:
                 print(f"  {idx}. {step}", flush=True)
-    print(f"{INFO}Expression:{RESET} {solution.expression}", flush=True)
-    print(f"{RESULT}Result:{RESET} {solution.value}", flush=True)
+    if solution.expression:
+        print(f"{INFO}Expression:{RESET} {solution.expression}", flush=True)
+    if solution.value is not None:
+        print(f"{RESULT}Result:{RESET} {solution.value}", flush=True)
+    if solution.answer and solution.value is None:
+        print(f"{RESULT}Answer:{RESET} {solution.answer}", flush=True)
+    if solution.outputs:
+        print(f"{RESULT}Outputs:{RESET}", flush=True)
+        for name, value in solution.outputs:
+            print(f"  - {name}: {value}", flush=True)
     if solution.reasoning:
         print(f"{INFO}Reasoning:{RESET} {solution.reasoning}", flush=True)
 

@@ -91,3 +91,4 @@ class CalculatorTool:
 if __name__ == "__main__":
     calc = CalculatorTool()
     print(calc.run("3 + 4 * 2"))
+    

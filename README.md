@@ -9,7 +9,15 @@ Single-agent example that asks LM Studio for an arithmetic expression, evaluates
 
 ## Usage
 ```bash
-python app.py "If Q4 revenue was 18.5M and Q3 was 15.2M, what's the QoQ growth?"
+python app.py "Start with a0 = 2, a1 = 3.         
+Define the sequence:
+a(n) = 2*a(n-1) + a(n-2)
+
+1) Compute a2, a3, a4.
+2) Let b = a4^2 - a3 * a2.
+3) Compute c = b / a1 + pi.
+
+What is the value of c?""
 ```
 
 Append `--mock` to bypass LM Studio and see deterministic placeholder responses while keeping the calculator call.
