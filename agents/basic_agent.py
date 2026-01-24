@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import calendar
@@ -134,7 +135,9 @@ class BasicAgent:
             ),
         )
         user = LLMMessage(role="user", content=f"Task: {task}")
+        start = time.perf_counter()
         raw = self.llm.chat([system, user], temperature=0)
+        self._log_duration("llm.route", start)
         self._log("normal", f"{AGENT_COLOR}[agent] routing response:\n{self._format_plan_text(raw)}{RESET}")
         try:
             payload = raw[raw.find("{") : raw.rfind("}") + 1]
@@ -183,7 +186,9 @@ class BasicAgent:
                 ),
             )
             user = LLMMessage(role="user", content=f"Task: {task}\nReturn only JSON.")
+            start = time.perf_counter()
             raw = self.llm.chat([system, user])
+            self._log_duration(f"llm.plan.attempt{attempt+1}", start)
             self._log(
                 "normal",
                 f"{AGENT_COLOR}[agent] LLM plan response (attempt {attempt+1}):\n"
@@ -248,7 +253,9 @@ class BasicAgent:
                 ),
             )
             user = LLMMessage(role="user", content=f"Task: {task}\nReturn only JSON.")
+            start = time.perf_counter()
             raw = self.llm.chat([system, user], temperature=0)
+            self._log_duration(f"llm.tool_plan.attempt{attempt+1}", start)
             self._log(
                 "normal",
                 f"{AGENT_COLOR}[agent] LLM tool plan response (attempt {attempt+1}):\n"
@@ -410,7 +417,9 @@ class BasicAgent:
             self._log("detail", f"{AGENT_COLOR}[agent] normalized expr: {normalized}{RESET}")
             self._log_tool(f"calculator.run({normalized})")
             try:
+                start = time.perf_counter()
                 value = self.calculator.run(normalized)
+                self._log_duration(f"tool.calculator.step{idx}", start)
             except Exception as exc:  # noqa: BLE001
                 raise ValueError(f"Failed on step {idx} ({step.description}): {exc}") from exc
             target = step.store or f"step{idx}"
@@ -444,7 +453,9 @@ class BasicAgent:
             action = step.action
             if action == "date":
                 self._log_tool("date.run()")
+                start = time.perf_counter()
                 value = self.date_tool.run()
+                self._log_duration("tool.date", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'}={value}{RESET}")
                 continue
@@ -454,14 +465,18 @@ class BasicAgent:
                 days = int(args.get("days", 0) or 0)
                 months = int(args.get("months", 0) or 0)
                 years = int(args.get("years", 0) or 0)
+                start = time.perf_counter()
                 value = self._offset_date(str(base), days=days, months=months, years=years)
+                self._log_duration("tool.date_offset", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'}={value}{RESET}")
                 continue
             if action == "date_year_start":
                 args = self._resolve_args(step.args or {}, context)
                 base = args.get("base") or self.date_tool.run()
+                start = time.perf_counter()
                 value = self._year_start(str(base))
+                self._log_duration("tool.date_year_start", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'}={value}{RESET}")
                 continue
@@ -471,7 +486,9 @@ class BasicAgent:
                 date = args.get("date")
                 suffix = f", {date}" if date else ""
                 self._log_tool(f"tw_stock.fetch_daily({symbol}{suffix})")
+                start = time.perf_counter()
                 value = self.stock_tool.fetch_daily(symbol, str(date) if date else None)
+                self._log_duration("tool.stock_daily", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'} (quote){RESET}")
                 continue
@@ -480,7 +497,9 @@ class BasicAgent:
                 symbol = str(args.get("symbol", "")).strip()
                 month = str(args.get("month", "")).strip()
                 self._log_tool(f"tw_stock.fetch_month({symbol}, {month})")
+                start = time.perf_counter()
                 value = self.stock_tool.fetch_month(symbol, month)
+                self._log_duration("tool.stock_month", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'} (list){RESET}")
                 continue
@@ -490,7 +509,9 @@ class BasicAgent:
                 start = str(args.get("start", "")).strip()
                 end = str(args.get("end", "")).strip()
                 self._log_tool(f"tw_stock.fetch_range({symbol}, {start}, {end})")
+                start_time = time.perf_counter()
                 value = self.stock_tool.fetch_range(symbol, start, end)
+                self._log_duration("tool.stock_range", start_time)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'} (list){RESET}")
                 continue
@@ -499,7 +520,9 @@ class BasicAgent:
                 symbol = str(args.get("symbol", "")).strip()
                 count = int(args.get("count", 0))
                 self._log_tool(f"tw_stock.fetch_recent({symbol}, {count})")
+                start = time.perf_counter()
                 value = self.stock_tool.fetch_recent(symbol, count)
+                self._log_duration("tool.stock_recent", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'} (list){RESET}")
                 continue
@@ -519,7 +542,9 @@ class BasicAgent:
                     quote = context.get(quote_key)
                     label = quote_key
                 self._log_tool(f"quote_field.run({label}, {field})")
+                start = time.perf_counter()
                 value = self.quote_field.run(quote, field)
+                self._log_duration("tool.quote_field", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'}={value}{RESET}")
                 continue
@@ -530,7 +555,9 @@ class BasicAgent:
                 normalized = self._normalize(substituted)
                 self._log("detail", f"{AGENT_COLOR}[agent] calc expr: {normalized}{RESET}")
                 self._log_tool(f"calculator.run({normalized})")
+                start = time.perf_counter()
                 value = self.calculator.run(normalized)
+                self._log_duration("tool.calculator", start)
                 self._store_context(context, step.store or f"step{idx}", value)
                 self._log("detail", f"{AGENT_COLOR}[agent] stored {step.store or f'step{idx}'}={value}{RESET}")
                 continue
@@ -711,7 +738,10 @@ class BasicAgent:
                 f"Context JSON:\n{json.dumps(context, ensure_ascii=False, indent=2)}"
             ),
         )
-        return self.llm.chat([system, user], temperature=0)
+        start = time.perf_counter()
+        response = self.llm.chat([system, user], temperature=0)
+        self._log_duration("llm.finalize", start)
+        return response
 
     def _infer_calc_expression(self, store: str | None, steps: List[ToolStep]) -> str | None:
         if not store:
@@ -763,4 +793,11 @@ class BasicAgent:
             return
         if self.log_mode == "normal" and level == "detail":
             return
+        if self.log_mode == "detail":
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            message = f"[{timestamp}] {message}"
         print(message, flush=True)
+
+    def _log_duration(self, label: str, start: float) -> None:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        self._log("detail", f"{AGENT_COLOR}[agent] {label} took {elapsed_ms:.1f} ms{RESET}")

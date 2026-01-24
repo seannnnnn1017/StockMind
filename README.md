@@ -11,7 +11,7 @@ The LLM plans tool steps and the agent executes them.
 1. Create a virtual environment.
 2. `pip install -r requirements.txt`
 3. Run LM Studio's local server (OpenAI API mode) at `http://127.0.0.1:1234/v1`
-   with model `qwen/qwen3-8b` (default). Override with env vars if needed.
+   with model `qwen/qwen3-8b` (default). Override with env vars if needed. 
 
 Environment variables:
 - `LLM_BASE_URL`
@@ -61,3 +61,4 @@ may not produce valid tool plans.
 - `stock_daily` searches backward up to 12 months for a prior trading day when
   the exact date is missing.
 - Request timeout is 1 second in `tools/tw_stock.py`; adjust if needed.
+- For better tool-plan stability, it is recommended to disable the model's "thinking"/"reasoning" mode (if available) and run in normal chat/instruction mode. This reduces verbose chain-of-thought and helps the LLM adhere strictly to the tool JSON schema.
